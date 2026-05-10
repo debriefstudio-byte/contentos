@@ -62,11 +62,11 @@ export default function ContentOS() {
     try {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
-        headers: headers: {
+         headers: {
   "Content-Type": "application/json",
   "x-api-key": import.meta.env.VITE_ANTHROPIC_KEY,
   "anthropic-version": "2023-06-01",
-},,
+},
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514", max_tokens: 1000,
           messages: [{ role: "user", content: `Generate 6 social media content ideas.\nBusiness: ${aiForm.business}\nAudience: ${aiForm.audience}\nReturn ONLY a JSON array. Each object: title (max 60 chars), content (1-2 sentences), tags (array 1-3), suggestedChannels (array from: facebook instagram tiktok linkedin twitter youtube google). No markdown, pure JSON.` }],
