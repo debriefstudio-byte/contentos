@@ -1,4 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
 const CHANNELS = [
   { id: "facebook", name: "Facebook", color: "#1877F2" },
@@ -22,17 +28,10 @@ const STATUS_COLOR = {
   Scheduled: "#3B82F6", Published: "#22C55E",
 };
 
-const SEED = [
-  { id: 1, title: "5 Ways AI Transforms Social Media", content: "Discover how AI is revolutionizing content creation for small businesses.", channels: ["facebook", "linkedin"], status: "Ideas", scheduledDate: "2026-05-15", tags: ["AI", "Marketing"] },
-  { id: 2, title: "Behind the Scenes: Our AI Tools", content: "Take a look at the tools we use to power our clients' social presence.", channels: ["instagram", "tiktok"], status: "In Progress", scheduledDate: "2026-05-18", tags: ["BTS"] },
-  { id: 3, title: "Client Success Story", content: "How we helped a local business grow their online presence by 300%.", channels: ["facebook", "instagram", "linkedin"], status: "Scheduled", scheduledDate: "2026-05-20", tags: ["CaseStudy"] },
-  { id: 4, title: "AI Content Tips for SMBs", content: "Small businesses can now compete with enterprise brands using AI tools.", channels: ["twitter", "linkedin"], status: "Published", scheduledDate: "2026-05-10", tags: ["Tips"] },
-  { id: 5, title: "Weekly Engagement Roundup", content: "Top-performing posts from our client network this week.", channels: ["facebook", "instagram", "twitter"], status: "Scheduled", scheduledDate: "2026-05-22", tags: ["Weekly"] },
-];
-
 export default function ContentOS() {
   const [view, setView] = useState("kanban");
-  const [posts, setPosts] = useState(SEED);
+  const [posts, setPosts] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);
   const [aiOpen, setAiOpen] = useState(false);
   const [activeCh, setActiveCh] = useState("all");
@@ -45,28 +44,56 @@ export default function ContentOS() {
     audience: "Small and medium businesses wanting consistent social media presence",
   });
 
-  const filtered = activeCh === "all" ? posts : posts.filter(p => p.channels.includes(activeCh));
+  useEffect(() => { loadPosts(); }, []);
 
-  const nextId = () => Math.max(0, ...posts.map(p => p.id)) + 1;
+  const loadPosts = async () => {
+    setLoading(true);
+    const { data, error } = await supabase.from("posts").select("*").order("created_at", { ascending: false });
+    if (!error && data) setPosts(data);
+    setLoading(false);
+  };
 
-  const savePost = (p) => {
-    setPosts(prev => p.id ? prev.map(x => x.id === p.id ? p : x) : [...prev, { ...p, id: nextId() }]);
+  const filtered = activeCh === "all" ? posts : posts.filter(p => (p.channels || []).includes(activeCh));
+
+  const savePost = async (post) => {
+    const payload = {
+      title: post.title,
+      content: post.content,
+      channels: post.channels || [],
+      status: post.status,
+      scheduled_date: post.scheduledDate || post.scheduled_date || "",
+      tags: post.tags || [],
+    };
+    if (post.id) {
+      await supabase.from("posts").update(payload).eq("id", post.id);
+    } else {
+      await supabase.from("posts").insert(payload);
+    }
+    await loadPosts();
     setEditing(null);
   };
 
-  const delPost = (id) => { setPosts(prev => prev.filter(p => p.id !== id)); setEditing(null); };
-  const movePost = (id, status) => setPosts(prev => prev.map(p => p.id === id ? { ...p, status } : p));
+  const delPost = async (id) => {
+    await supabase.from("posts").delete().eq("id", id);
+    await loadPosts();
+    setEditing(null);
+  };
+
+  const movePost = async (id, status) => {
+    await supabase.from("posts").update({ status }).eq("id", id);
+    setPosts(prev => prev.map(p => p.id === id ? { ...p, status } : p));
+  };
 
   const genIdeas = async () => {
     setAiLoading(true); setAiIdeas([]);
     try {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
-         headers: {
-  "Content-Type": "application/json",
-  "x-api-key": import.meta.env.VITE_ANTHROPIC_KEY,
-  "anthropic-version": "2023-06-01",
-},
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": import.meta.env.VITE_ANTHROPIC_KEY,
+          "anthropic-version": "2023-06-01",
+        },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514", max_tokens: 1000,
           messages: [{ role: "user", content: `Generate 6 social media content ideas.\nBusiness: ${aiForm.business}\nAudience: ${aiForm.audience}\nReturn ONLY a JSON array. Each object: title (max 60 chars), content (1-2 sentences), tags (array 1-3), suggestedChannels (array from: facebook instagram tiktok linkedin twitter youtube google). No markdown, pure JSON.` }],
@@ -78,7 +105,16 @@ export default function ContentOS() {
     setAiLoading(false);
   };
 
-  const addIdea = (idea) => setPosts(prev => [...prev, { id: nextId(), title: idea.title, content: idea.content, channels: idea.suggestedChannels || [], status: "Ideas", scheduledDate: "", tags: idea.tags || [] }]);
+  const addIdea = async (idea) => {
+    await supabase.from("posts").insert({
+      title: idea.title, content: idea.content,
+      channels: idea.suggestedChannels || [], status: "Ideas",
+      scheduled_date: "", tags: idea.tags || [],
+    });
+    await loadPosts();
+  };
+
+  const normalizePost = (p) => ({ ...p, scheduledDate: p.scheduled_date || "", channels: p.channels || [], tags: p.tags || [] });
 
   return (
     <div style={{ display: "flex", height: "100vh", fontFamily: "'DM Sans', system-ui, sans-serif", background: "#F7F6F3", overflow: "hidden" }}>
@@ -144,7 +180,7 @@ export default function ContentOS() {
               onClick={() => setActiveCh(p => p === ch.id ? "all" : ch.id)}>
               <span style={{ fontSize: 13 }}>{CH_ICON[ch.id]}</span>
               <span>{ch.name}</span>
-              <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: "#334155" }}>{posts.filter(p => p.channels.includes(ch.id)).length}</span>
+              <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: "#334155" }}>{posts.filter(p => (p.channels || []).includes(ch.id)).length}</span>
             </button>
           ))}
         </div>
@@ -159,7 +195,6 @@ export default function ContentOS() {
 
       {/* MAIN */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        {/* Header */}
         <div style={{ background: "white", borderBottom: "1px solid #F1F5F9", padding: "15px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
           <div>
             <div style={{ fontSize: 18, fontWeight: 700, color: "#0F172A", letterSpacing: "-.025em" }}>
@@ -175,11 +210,14 @@ export default function ContentOS() {
           </div>
         </div>
 
-        {/* View */}
         <div style={{ flex: 1, overflow: "auto", padding: 22 }}>
-          {view === "kanban"
-            ? <KanbanView posts={filtered} onEdit={setEditing} onMove={movePost} dragId={dragId} setDragId={setDragId} dragOver={dragOver} setDragOver={setDragOver} />
-            : <CalendarView posts={filtered} onEdit={setEditing} />}
+          {loading ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#94A3B8", fontSize: 14 }}>
+              <span className="spin" style={{ marginRight: 8 }}>⟳</span> Loading posts...
+            </div>
+          ) : view === "kanban"
+            ? <KanbanView posts={filtered} onEdit={p => setEditing(normalizePost(p))} onMove={movePost} dragId={dragId} setDragId={setDragId} dragOver={dragOver} setDragOver={setDragOver} />
+            : <CalendarView posts={filtered} onEdit={p => setEditing(normalizePost(p))} />}
         </div>
       </div>
 
@@ -211,17 +249,17 @@ function KanbanView({ posts, onEdit, onMove, dragId, setDragId, dragOver, setDra
                   onClick={() => onEdit(post)}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: "#0F172A", marginBottom: 5, lineHeight: 1.35 }}>{post.title}</div>
                   <div style={{ fontSize: 11.5, color: "#94A3B8", marginBottom: 9, lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{post.content}</div>
-                  {post.tags.length > 0 && (
+                  {(post.tags || []).length > 0 && (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
-                      {post.tags.map(t => <span key={t} className="chip">#{t}</span>)}
+                      {(post.tags || []).map(t => <span key={t} className="chip">#{t}</span>)}
                     </div>
                   )}
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <div style={{ display: "flex", gap: 3 }}>
-                      {post.channels.slice(0, 4).map(ch => <span key={ch} title={CHANNELS.find(c => c.id === ch)?.name} style={{ fontSize: 13 }}>{CH_ICON[ch]}</span>)}
-                      {post.channels.length > 4 && <span style={{ fontSize: 10, color: "#94A3B8", alignSelf: "center" }}>+{post.channels.length - 4}</span>}
+                      {(post.channels || []).slice(0, 4).map(ch => <span key={ch} title={CHANNELS.find(c => c.id === ch)?.name} style={{ fontSize: 13 }}>{CH_ICON[ch]}</span>)}
+                      {(post.channels || []).length > 4 && <span style={{ fontSize: 10, color: "#94A3B8", alignSelf: "center" }}>+{post.channels.length - 4}</span>}
                     </div>
-                    {post.scheduledDate && <span style={{ fontSize: 10, color: "#94A3B8" }}>{post.scheduledDate}</span>}
+                    {post.scheduled_date && <span style={{ fontSize: 10, color: "#94A3B8" }}>{post.scheduled_date}</span>}
                   </div>
                 </div>
               ))}
@@ -235,7 +273,7 @@ function KanbanView({ posts, onEdit, onMove, dragId, setDragId, dragOver, setDra
 }
 
 function CalendarView({ posts, onEdit }) {
-  const [date, setDate] = useState(new Date(2026, 4, 1));
+  const [date, setDate] = useState(new Date());
   const y = date.getFullYear(), m = date.getMonth();
   const firstDay = new Date(y, m, 1).getDay();
   const days = new Date(y, m + 1, 0).getDate();
@@ -248,7 +286,7 @@ function CalendarView({ posts, onEdit }) {
 
   const postsOn = (d) => {
     const k = `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    return posts.filter(p => p.scheduledDate === k);
+    return posts.filter(p => p.scheduled_date === k);
   };
 
   return (
@@ -272,7 +310,7 @@ function CalendarView({ posts, onEdit }) {
                   <div style={{ fontSize: 11, fontWeight: isToday ? 700 : 400, color: isToday ? "white" : "#64748B", background: isToday ? "#22C55E" : "transparent", width: 20, height: 20, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 3 }}>{day}</div>
                   {dp.map(p => (
                     <div key={p.id} className="cppost" onClick={() => onEdit(p)} style={{ background: STATUS_COLOR[p.status] }} title={p.title}>
-                      {CH_ICON[p.channels[0]]} {p.title}
+                      {CH_ICON[(p.channels || [])[0]]} {p.title}
                     </div>
                   ))}
                 </>
@@ -288,15 +326,22 @@ function CalendarView({ posts, onEdit }) {
 function PostModal({ post, onSave, onDelete, onClose }) {
   const [form, setForm] = useState({ ...post });
   const [tagIn, setTagIn] = useState("");
+  const [saving, setSaving] = useState(false);
   const isNew = !post.id;
 
-  const toggleCh = id => setForm(f => ({ ...f, channels: f.channels.includes(id) ? f.channels.filter(c => c !== id) : [...f.channels, id] }));
+  const toggleCh = id => setForm(f => ({ ...f, channels: (f.channels || []).includes(id) ? f.channels.filter(c => c !== id) : [...(f.channels || []), id] }));
   const handleTag = e => {
     if ((e.key === "Enter" || e.key === ",") && tagIn.trim()) {
       e.preventDefault();
-      if (!form.tags.includes(tagIn.trim())) setForm(f => ({ ...f, tags: [...f.tags, tagIn.trim()] }));
+      if (!(form.tags || []).includes(tagIn.trim())) setForm(f => ({ ...f, tags: [...(f.tags || []), tagIn.trim()] }));
       setTagIn("");
     }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    await onSave(form);
+    setSaving(false);
   };
 
   return (
@@ -308,13 +353,13 @@ function PostModal({ post, onSave, onDelete, onClose }) {
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 15 }}>
-          <div><label className="lbl">Title</label><input className="inp" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="Post title..." /></div>
-          <div><label className="lbl">Content / Caption</label><textarea className="inp" value={form.content} onChange={e => setForm(f => ({ ...f, content: e.target.value }))} placeholder="Write your content..." /></div>
+          <div><label className="lbl">Title</label><input className="inp" value={form.title || ""} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="Post title..." /></div>
+          <div><label className="lbl">Content / Caption</label><textarea className="inp" value={form.content || ""} onChange={e => setForm(f => ({ ...f, content: e.target.value }))} placeholder="Write your content..." /></div>
           <div>
             <label className="lbl">Channels</label>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {CHANNELS.map(ch => {
-                const on = form.channels.includes(ch.id);
+                const on = (form.channels || []).includes(ch.id);
                 return (
                   <div key={ch.id} className="cpill" onClick={() => toggleCh(ch.id)}
                     style={on ? { background: `${ch.color}14`, borderColor: ch.color, color: ch.color } : {}}>
@@ -326,13 +371,13 @@ function PostModal({ post, onSave, onDelete, onClose }) {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div><label className="lbl">Status</label><select className="inp" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}>{STATUSES.map(s => <option key={s}>{s}</option>)}</select></div>
-            <div><label className="lbl">Scheduled Date</label><input className="inp" type="date" value={form.scheduledDate} onChange={e => setForm(f => ({ ...f, scheduledDate: e.target.value }))} /></div>
+            <div><label className="lbl">Scheduled Date</label><input className="inp" type="date" value={form.scheduledDate || form.scheduled_date || ""} onChange={e => setForm(f => ({ ...f, scheduledDate: e.target.value, scheduled_date: e.target.value }))} /></div>
           </div>
           <div>
             <label className="lbl">Tags (Enter to add)</label>
-            {form.tags.length > 0 && (
+            {(form.tags || []).length > 0 && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 7 }}>
-                {form.tags.map(t => <span key={t} className="chip" style={{ cursor: "pointer" }} onClick={() => setForm(f => ({ ...f, tags: f.tags.filter(x => x !== t) }))}>#{t} ✕</span>)}
+                {(form.tags || []).map(t => <span key={t} className="chip" style={{ cursor: "pointer" }} onClick={() => setForm(f => ({ ...f, tags: f.tags.filter(x => x !== t) }))}>#{t} ✕</span>)}
               </div>
             )}
             <input className="inp" value={tagIn} onChange={e => setTagIn(e.target.value)} onKeyDown={handleTag} placeholder="Type tag and press Enter..." />
@@ -343,7 +388,9 @@ function PostModal({ post, onSave, onDelete, onClose }) {
           <div>{!isNew && <button className="btn bd" onClick={() => onDelete(post.id)}>Delete</button>}</div>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn bg" onClick={onClose}>Cancel</button>
-            <button className="btn bp" onClick={() => onSave(form)} disabled={!form.title.trim()}>{isNew ? "Create Post" : "Save Changes"}</button>
+            <button className="btn bp" onClick={handleSave} disabled={!form.title?.trim() || saving}>
+              {saving ? <span className="spin">⟳</span> : isNew ? "Create Post" : "Save Changes"}
+            </button>
           </div>
         </div>
       </div>
